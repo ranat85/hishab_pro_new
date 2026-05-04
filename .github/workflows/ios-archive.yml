@@ -1,0 +1,71 @@
+name: iOS Archive & Export
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ios-archive:
+    runs-on: macos-latest
+    env:
+      FLUTTER_VERSION: 'stable'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install CocoaPods
+        run: |
+          sudo gem install cocoapods
+
+      - name: Install iOS pods
+        working-directory: ios
+        run: |
+          pod repo update || true
+          pod install --verbose
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        run: flutter build ios --no-codesign --release
+
+      - name: Create ExportOptions.plist
+        run: |
+          cat > ExportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>compileBitcode</key><false/>
+            <key>method</key><string>ad-hoc</string>
+            <key>signingStyle</key><string>manual</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Archive with xcodebuild
+        run: |
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Release -archivePath build/Runner.xcarchive clean archive
+
+      - name: Export Archive
+        run: |
+          # Export may fail without signing credentials; keep step but don't fail workflow on export error
+          set -o pipefail
+          xcodebuild -exportArchive -archivePath build/Runner.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath build/Runner.ipa || true
+
+      - name: Upload xcarchive
+        uses: actions/upload-artifact@v4
+        with:
+          name: Runner-xcarchive
+          path: build/Runner.xcarchive
+
+      - name: Upload exported ipa
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Runner-ipa
+          path: build/Runner.ipa

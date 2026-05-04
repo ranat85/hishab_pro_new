@@ -1,0 +1,3592 @@
+// ignore_for_file: deprecated_member_use
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:pdf/pdf.dart' as pdf;
+import 'package:share_plus/share_plus.dart' as share_plus;
+import 'package:intl/intl.dart';
+import 'package:flutter/services.dart' show rootBundle, MethodChannel;
+import 'package:audioplayers/audioplayers.dart';
+
+void main() => runApp(const MyApp());
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: DashboardScreen(),
+    );
+  }
+}
+
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  List<Map<String, dynamic>> _accounts = [];
+  final _nameController = TextEditingController();
+  final _editController = TextEditingController();
+  final _amountController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAccounts();
+  }
+
+  Future<void> _loadAccounts() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? json = prefs.getString('accounts');
+    if (json != null) {
+      final List<dynamic> decoded = jsonDecode(json);
+      setState(() {
+        _accounts = decoded.map((item) {
+          final map = Map<String, dynamic>.from(item);
+          final txList =
+              (map['transactions'] as List<dynamic>?)
+                  ?.map((tx) => Map<String, dynamic>.from(tx))
+                  .toList() ??
+              [];
+          map['transactions'] = txList;
+          return map;
+        }).toList();
+      });
+    }
+  }
+
+  Future<void> _saveAccounts() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('accounts', jsonEncode(_accounts));
+  }
+
+  void _addAccount() {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('অ্যাকাউন্টের নাম দিন')));
+      return;
+    }
+    setState(() {
+      _accounts.add({
+        'name': name,
+        'credit': 0.0,
+        'debit': 0.0,
+        'balance': 0.0,
+        'transactions': [],
+      });
+    });
+    _saveAccounts();
+    _nameController.clear();
+    Navigator.pop(context);
+  }
+
+  void _editAccount(int index) {
+    _editController.text = _accounts[index]['name'];
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Account Name'),
+        content: TextField(controller: _editController),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final newName = _editController.text.trim();
+              if (newName.isNotEmpty) {
+                setState(() => _accounts[index]['name'] = newName);
+                _saveAccounts();
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _deleteAccount(int index) {
+    setState(() => _accounts.removeAt(index));
+    _saveAccounts();
+  }
+
+  void _showTransactionDialog(int index) {
+    _amountController.clear();
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_accounts[index]['name']),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _amountController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'পরিমাণ (৳)'),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    final amount =
+                        double.tryParse(_amountController.text.trim()) ?? 0.0;
+                    if (amount > 0) {
+                      setState(() {
+                        _accounts[index]['credit'] += amount;
+                        _accounts[index]['balance'] += amount;
+                        (_accounts[index]['transactions'] as List).add({
+                          'date': DateTime.now().toString().substring(0, 10),
+                          'particular': 'Credit',
+                          'credit': amount,
+                          'debit': 0.0,
+                        });
+                      });
+                      _saveAccounts();
+                      Navigator.pop(context);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                  ),
+                  child: const Text('Credit'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final amount =
+                        double.tryParse(_amountController.text.trim()) ?? 0.0;
+                    if (amount > 0) {
+                      setState(() {
+                        _accounts[index]['debit'] += amount;
+                        _accounts[index]['balance'] -= amount;
+                        (_accounts[index]['transactions'] as List).add({
+                          'date': DateTime.now().toString().substring(0, 10),
+                          'particular': 'Debit',
+                          'credit': 0.0,
+                          'debit': amount,
+                        });
+                      });
+                      _saveAccounts();
+                      Navigator.pop(context);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  child: const Text('Debit'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSelectAccountDialog() {
+    String searchQuery = '';
+    String? selectedName;
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final filtered = _accounts
+                .where(
+                  (acc) => acc['name'].toString().toLowerCase().contains(
+                    searchQuery.toLowerCase(),
+                  ),
+                )
+                .toList();
+            return AlertDialog(
+              title: const Text('Select account'),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 400,
+                child: Column(
+                  children: [
+                    TextField(
+                      onChanged: (value) =>
+                          setDialogState(() => searchQuery = value),
+                      decoration: const InputDecoration(
+                        labelText: 'Search account',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (ctx, idx) {
+                          final acc = filtered[idx];
+                          return RadioListTile<String>(
+                            title: Text(acc['name']),
+                            value: acc['name'],
+                            groupValue: selectedName,
+                            onChanged: (value) =>
+                                setDialogState(() => selectedName = value),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('CANCEL'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (selectedName != null) {
+                      final idx = _accounts.indexWhere(
+                        (a) => a['name'] == selectedName,
+                      );
+                      if (idx != -1) {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => AccountHistoryScreen(
+                              accountIndex: idx,
+                              accounts: _accounts,
+                              onSave: _saveAccounts,
+                            ),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF673AB7),
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('VIEW'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('হিসাব প্রো'),
+        backgroundColor: const Color(0xFF673AB7),
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: _showSelectAccountDialog,
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) => ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(value))),
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'Settings', child: Text('Settings')),
+              const PopupMenuItem(value: 'Backup', child: Text('Backup')),
+              const PopupMenuItem(value: 'About', child: Text('About')),
+            ],
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: _accounts.isEmpty
+            ? const Center(
+                child: Text(
+                  'কোনো অ্যাকাউন্ট নেই\nনতুন যোগ করুন',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 20, color: Colors.black54),
+                ),
+              )
+            : ListView.builder(
+                itemCount: _accounts.length,
+                itemBuilder: (context, index) {
+                  final acc = _accounts[index];
+                  final balance = (acc['balance'] as double?) ?? 0.0;
+                  return GestureDetector(
+                    onTap: () => _showTransactionDialog(index),
+                    child: Card(
+                      elevation: 8,
+                      shadowColor: Colors.black.withAlpha(102),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      color: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.all(10.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    acc['name'],
+                                    style: const TextStyle(
+                                      fontSize: 21,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ),
+                                _build3DIconButton(
+                                  Icons.edit,
+                                  Colors.blue,
+                                  () => _editAccount(index),
+                                ),
+                                _build3DIconButton(
+                                  Icons.delete,
+                                  Colors.red,
+                                  () => _deleteAccount(index),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                _buildBox(
+                                  'Credit(↑)',
+                                  acc['credit'] ?? 0.0,
+                                  Colors.green.shade600,
+                                ),
+                                _buildBox(
+                                  'Debit(↓)',
+                                  acc['debit'] ?? 0.0,
+                                  Colors.red.shade600,
+                                ),
+                                _buildBox(
+                                  'Balance',
+                                  balance,
+                                  balance >= 0
+                                      ? Colors.blue.shade700
+                                      : Colors.orange.shade700,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          _nameController.clear();
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: Colors.white,
+              title: const Text('Add new account'),
+              content: TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Account name'),
+                autofocus: true,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('CANCEL'),
+                ),
+                ElevatedButton(
+                  onPressed: _addAccount,
+                  child: const Text('SAVE'),
+                ),
+              ],
+            ),
+          );
+        },
+        backgroundColor: const Color(0xFF673AB7),
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _build3DIconButton(
+    IconData icon,
+    Color color,
+    VoidCallback onPressed,
+  ) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(77),
+              blurRadius: 6,
+              offset: const Offset(2, 4),
+            ),
+            BoxShadow(
+              color: Colors.white.withAlpha(204),
+              blurRadius: 6,
+              offset: const Offset(-2, -2),
+            ),
+          ],
+        ),
+        child: Icon(icon, color: color, size: 22),
+      ),
+    );
+  }
+
+  Widget _buildBox(String label, double value, Color color) {
+    return Expanded(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 1),
+        padding: const EdgeInsets.fromLTRB(4, 5, 4, 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F5F5),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF673AB7), width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(153),
+              blurRadius: 12,
+              offset: const Offset(4, 8),
+              spreadRadius: 2,
+            ),
+            BoxShadow(
+              color: Colors.grey.withAlpha(102),
+              blurRadius: 8,
+              offset: const Offset(-3, -3),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '৳ ${value.toStringAsFixed(0)}',
+              style: TextStyle(
+                color: color,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AccountHistoryScreen extends StatefulWidget {
+  final int accountIndex;
+  final List<Map<String, dynamic>> accounts;
+  final VoidCallback onSave;
+
+  const AccountHistoryScreen({
+    super.key,
+    required this.accountIndex,
+    required this.accounts,
+    required this.onSave,
+  });
+
+  @override
+  State<AccountHistoryScreen> createState() => _AccountHistoryScreenState();
+}
+
+class _AccountHistoryScreenState extends State<AccountHistoryScreen> {
+  late Map<String, dynamic> account;
+  late List<Map<String, dynamic>> transactions;
+  final FocusNode _amountFocusNode = FocusNode();
+  final FocusNode _particularFocusNode = FocusNode();
+  final TextEditingController particularCtrl = TextEditingController();
+  final TextEditingController amountCtrl = TextEditingController();
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  List<String> productList = [];
+  String _previousText = '';
+  final ScrollController _scrollController = ScrollController();
+
+  // Date filter variables
+  DateTime? _filterFromDate;
+  DateTime? _filterToDate;
+  bool _showFilterPanel = false;
+
+  // Search filter variables
+  final TextEditingController _amountFilterCtrl = TextEditingController();
+  final TextEditingController _particularFilterCtrl = TextEditingController();
+  bool _reverseSorting = false;
+
+  // Balance calculation variables
+  double _previousBalance = 0.0;
+  double _selectedRangeBalance = 0.0;
+
+  void _showWheelDatePicker(
+    DateTime initialDate,
+    StateSetter setModalState,
+    Function(DateTime) onDateSelected,
+  ) {
+    // Simplified date picker: use platform date picker instead of the custom
+    // wheel picker. It returns a DateTime which we pass to the caller.
+    showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    ).then((picked) {
+      if (picked != null) onDateSelected(picked);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    account = widget.accounts[widget.accountIndex];
+    transactions = List<Map<String, dynamic>>.from(
+      account['transactions'] ?? [],
+    );
+    _loadProducts();
+  }
+
+  Future<void> _loadProducts() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? json = prefs.getString('products');
+    if (json != null) {
+      final List<dynamic> decoded = jsonDecode(json);
+      setState(() => productList = decoded.cast<String>());
+    } else {
+      productList = [
+        'চাল',
+        'ডাল',
+        'তেল',
+        'চিনি',
+        'লবণ',
+        'সাবান',
+        'মশলা',
+        'দুধ',
+        'ডিম',
+      ];
+      _saveProducts();
+    }
+  }
+
+  Future<void> _saveProducts() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('products', jsonEncode(productList));
+  }
+
+  @override
+  void dispose() {
+    _amountFocusNode.dispose();
+    _particularFocusNode.dispose();
+    particularCtrl.dispose();
+    amountCtrl.dispose();
+    _audioPlayer.dispose();
+    _scrollController.dispose();
+    _amountFilterCtrl.dispose();
+    _particularFilterCtrl.dispose();
+    super.dispose();
+  }
+
+  double get totalCredit => (account['credit'] as num?)?.toDouble() ?? 0.0;
+  double get totalDebit => (account['debit'] as num?)?.toDouble() ?? 0.0;
+  double get balance => (account['balance'] as num?)?.toDouble() ?? 0.0;
+
+  String _fmt(double value) {
+    try {
+      // Use Indian grouping (lakhs) so 888888 -> 8,88,888
+      return NumberFormat.decimalPattern('en_IN').format(value.round());
+    } catch (_) {
+      return value.toStringAsFixed(0);
+    }
+  }
+
+  String _fmtMoney(double value) {
+    try {
+      return NumberFormat('#,##0.00', 'en_IN').format(value);
+    } catch (_) {
+      return value.toStringAsFixed(2);
+    }
+  }
+
+  // Robust date parser for transaction date strings
+  DateTime? _parseTxDate(String? s) {
+    if (s == null) return null;
+    final str = s.toString().trim();
+    if (str.isEmpty) return null;
+    try {
+      // common formats used across the app
+      return DateFormat('dd-MM-yyyy').parseStrict(str);
+    } catch (_) {}
+    try {
+      return DateFormat('dd/MM/yyyy').parseStrict(str);
+    } catch (_) {}
+    try {
+      return DateTime.parse(str);
+    } catch (_) {}
+    try {
+      return DateFormat('yyyy-MM-dd').parseStrict(str);
+    } catch (_) {}
+    return null;
+  }
+
+  // Calculate balance before the selected date range
+  double _calculatePreviousBalance() {
+    if (_filterFromDate == null) return 0.0;
+
+    double balance = 0.0;
+    for (final tx in transactions) {
+      try {
+        final txDate = _parseTxDate(tx['date']?.toString());
+        if (txDate == null) continue;
+        if (txDate.isBefore(_filterFromDate!)) {
+          final credit = (tx['credit'] as num?)?.toDouble() ?? 0.0;
+          final debit = (tx['debit'] as num?)?.toDouble() ?? 0.0;
+          balance += (credit - debit);
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return balance;
+  }
+
+  // Calculate balance for the selected date range
+  double _calculateSelectedRangeBalance(List<Map<String, dynamic>> filtered) {
+    double balance = 0.0;
+    for (final tx in filtered) {
+      final credit = (tx['credit'] as num?)?.toDouble() ?? 0.0;
+      final debit = (tx['debit'] as num?)?.toDouble() ?? 0.0;
+      balance += (credit - debit);
+    }
+    return balance;
+  }
+
+  List<Map<String, dynamic>> _getFilteredTransactions() {
+    // First filter by date range
+    List<Map<String, dynamic>> filtered = transactions;
+
+    if (_filterFromDate != null || _filterToDate != null) {
+      filtered = transactions.where((tx) {
+        try {
+          final txDate = _parseTxDate(tx['date']?.toString());
+          if (txDate == null) return true;
+
+          if (_filterFromDate != null && txDate.isBefore(_filterFromDate!)) {
+            return false;
+          }
+
+          if (_filterToDate != null) {
+            final toDateEndOfDay = _filterToDate!.add(const Duration(days: 1));
+            if (txDate.isAfter(toDateEndOfDay)) {
+              return false;
+            }
+          }
+
+          return true;
+        } catch (_) {
+          return true;
+        }
+      }).toList();
+    }
+
+    // Apply reverse sorting (newest first)
+    if (_reverseSorting) {
+      filtered = filtered.reversed.toList();
+    }
+
+    // Calculate balances
+    _previousBalance = _calculatePreviousBalance();
+    _selectedRangeBalance = _calculateSelectedRangeBalance(filtered);
+
+    // Debug info: print summary to console
+    try {
+      print(
+        '[_getFilteredTransactions] from=$_filterFromDate to=$_filterToDate reverse=$_reverseSorting filtered=${filtered.length} previous=$_previousBalance selected=$_selectedRangeBalance total=${_previousBalance + _selectedRangeBalance}',
+      );
+      if (filtered.isNotEmpty) {
+        final sample = filtered
+            .take(3)
+            .map(
+              (tx) =>
+                  '${tx['date']}:${tx['particular']}:${tx['credit'] ?? 0}/${tx['debit'] ?? 0}',
+            )
+            .join(' | ');
+        print('[sample tx] $sample');
+      }
+    } catch (_) {}
+
+    return filtered;
+  }
+
+  void _clearFilters() {
+    setState(() {
+      _filterFromDate = null;
+      _filterToDate = null;
+      _reverseSorting = false;
+    });
+  }
+
+  void _applyFilters() {
+    setState(() {
+      _showFilterPanel = false;
+      // Force recalculation and print debug info
+      final filtered = _getFilteredTransactions();
+      try {
+        print(
+          '[ApplyFilters] from=$_filterFromDate to=$_filterToDate reverse=$_reverseSorting filtered=${filtered.length} previous=$_previousBalance selected=$_selectedRangeBalance total=${_previousBalance + _selectedRangeBalance}',
+        );
+      } catch (_) {}
+    });
+  }
+
+  void _tryCalculateFormula(String text) {
+    final trimmed = text.trim();
+    // Support formulas with decimals and operators: * / + - x (and ×)
+    final RegExp regex = RegExp(
+      r"(\d+(?:\.\d+)?)\s*([\*×xX\/+\-])\s*(\d+(?:\.\d+)?)$",
+    );
+    final match = regex.firstMatch(trimmed);
+    if (match != null) {
+      final left = double.tryParse(match.group(1) ?? '0') ?? 0.0;
+      final op = match.group(2) ?? '*';
+      final right = double.tryParse(match.group(3) ?? '0') ?? 0.0;
+      double result;
+      switch (op) {
+        case '*':
+        case '×':
+        case 'x':
+        case 'X':
+          result = left * right;
+          break;
+        case '/':
+          if (right == 0) return;
+          result = left / right;
+          break;
+        case '+':
+          result = left + right;
+          break;
+        case '-':
+          result = left - right;
+          break;
+        default:
+          return;
+      }
+
+      // Format: if integer result, show without decimals, else keep decimals
+      final out = (result % 1 == 0)
+          ? result.toStringAsFixed(0)
+          : result.toString();
+      if (result != 0) amountCtrl.text = out;
+    }
+  }
+
+  void _addTransaction() {
+    DateTime selectedDate = DateTime.now();
+    bool isCredit = true;
+
+    particularCtrl.clear();
+    amountCtrl.clear();
+
+    final newProductController = TextEditingController();
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Scaffold(
+              resizeToAvoidBottomInset: true,
+              backgroundColor: Colors.transparent,
+              body: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.45,
+                    maxWidth: MediaQuery.of(context).size.width * 0.92,
+                  ),
+                  child: Material(
+                    elevation: 12,
+                    borderRadius: BorderRadius.circular(24),
+                    color: const Color(0xFF673AB7),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Center(
+                                  child: Text(
+                                    'Add transaction',
+                                    style: TextStyle(
+                                      color: const Color.fromARGB(
+                                        255,
+                                        255,
+                                        255,
+                                        255,
+                                      ),
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      'Transaction Date : ',
+                                      style: TextStyle(
+                                        color: const Color.fromARGB(
+                                          255,
+                                          255,
+                                          255,
+                                          255,
+                                        ),
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: InkWell(
+                                        onTap: () => _showWheelDatePicker(
+                                          selectedDate,
+                                          setModalState,
+                                          (newDate) => setModalState(
+                                            () => selectedDate = newDate,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          DateFormat(
+                                            'dd MMM, yyyy',
+                                          ).format(selectedDate),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 15,
+                                            decoration:
+                                                TextDecoration.underline,
+                                            decorationColor: Colors.amber,
+                                            decorationThickness: 1.5,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    InkWell(
+                                      onTap: () => _showWheelDatePicker(
+                                        selectedDate,
+                                        setModalState,
+                                        (newDate) => setModalState(
+                                          () => selectedDate = newDate,
+                                        ),
+                                      ),
+                                      child: const Icon(
+                                        Icons.arrow_drop_down_circle,
+                                        color: Colors.amber,
+                                        size: 22,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                const SizedBox(height: 20),
+
+                                Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        'Transaction type :',
+                                        style: const TextStyle(
+                                          color: Color.fromARGB(
+                                            255,
+                                            255,
+                                            255,
+                                            255,
+                                          ),
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
+                                    Flexible(
+                                      child: Align(
+                                        alignment: Alignment.centerRight,
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerRight,
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Transform.scale(
+                                                    scale: 2.2,
+                                                    child: Radio<bool>(
+                                                      value: true,
+                                                      groupValue: isCredit,
+                                                      activeColor: Colors.amber,
+                                                      onChanged: (v) {
+                                                        if (v != null) {
+                                                          setModalState(
+                                                            () => isCredit = v,
+                                                          );
+                                                        }
+                                                      },
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  const Text(
+                                                    'Credit (+)',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 24,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Transform.scale(
+                                                    scale: 2.2,
+                                                    child: Radio<bool>(
+                                                      value: false,
+                                                      groupValue: isCredit,
+                                                      activeColor: Colors.amber,
+                                                      onChanged: (v) {
+                                                        if (v != null) {
+                                                          setModalState(
+                                                            () => isCredit = v,
+                                                          );
+                                                        }
+                                                      },
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  const Text(
+                                                    'Debit (-)',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 24,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                const SizedBox(height: 0),
+
+                                Text(
+                                  'Amount :',
+                                  style: TextStyle(
+                                    color: const Color.fromARGB(
+                                      255,
+                                      255,
+                                      255,
+                                      255,
+                                    ),
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 1),
+
+                                TextField(
+                                  controller: amountCtrl,
+                                  focusNode: _amountFocusNode,
+                                  cursorColor: Colors.amber,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  textInputAction: TextInputAction.next,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                  ),
+                                  decoration: InputDecoration(
+                                    hintText: '0.00',
+                                    hintStyle: const TextStyle(
+                                      color: Color.fromARGB(255, 255, 255, 255),
+                                    ),
+                                    prefixText: '৳ ',
+                                    prefixStyle: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      vertical: 6,
+                                      horizontal: 8,
+                                    ),
+                                    border: const UnderlineInputBorder(
+                                      borderSide: BorderSide(
+                                        color: Colors.amber,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    enabledBorder: const UnderlineInputBorder(
+                                      borderSide: BorderSide(
+                                        color: Colors.amber,
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    focusedBorder: const UnderlineInputBorder(
+                                      borderSide: BorderSide(
+                                        color: Colors.amber,
+                                        width: 2.5,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+
+                                Text(
+                                  'Particular :',
+                                  style: TextStyle(
+                                    color: const Color.fromARGB(
+                                      255,
+                                      255,
+                                      255,
+                                      255,
+                                    ),
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 5),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.arrow_drop_down_circle,
+                                        color: Colors.amber,
+                                        size: 25,
+                                      ),
+                                      tooltip: 'পণ্য সিলেক্ট করুন',
+                                      onPressed: () {
+                                        showDialog(
+                                          context: context,
+                                          builder: (ctx) => StatefulBuilder(
+                                            builder: (ctx, setDialogState) {
+                                              return AlertDialog(
+                                                title: const Text(
+                                                  'পণ্য সিলেক্ট করুন',
+                                                  style: TextStyle(
+                                                    fontSize: 17,
+                                                  ),
+                                                ),
+                                                content: SizedBox(
+                                                  width: double.maxFinite,
+                                                  height: 280,
+                                                  child: Column(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .spaceBetween,
+                                                    children: [
+                                                      Expanded(
+                                                        child: ListView.builder(
+                                                          itemCount: productList
+                                                              .length,
+                                                          itemBuilder: (ctx, idx) {
+                                                            final item =
+                                                                productList[idx];
+                                                            return ListTile(
+                                                              dense: true,
+                                                              visualDensity:
+                                                                  VisualDensity
+                                                                      .compact,
+                                                              contentPadding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    horizontal:
+                                                                        12,
+                                                                    vertical: 0,
+                                                                  ),
+                                                              title: Text(
+                                                                item,
+                                                                style: const TextStyle(
+                                                                  fontSize: 16,
+                                                                  color: Colors
+                                                                      .black87,
+                                                                ),
+                                                              ),
+                                                              onLongPress: () {
+                                                                showDialog(
+                                                                  context:
+                                                                      context,
+                                                                  builder: (confirmCtx) => AlertDialog(
+                                                                    title: const Text(
+                                                                      'ডিলিট করবেন?',
+                                                                    ),
+                                                                    content: Text(
+                                                                      'আপনি কি "$item" ডিলিট করতে চান?',
+                                                                    ),
+                                                                    actions: [
+                                                                      TextButton(
+                                                                        onPressed: () =>
+                                                                            Navigator.pop(
+                                                                              confirmCtx,
+                                                                            ),
+                                                                        child: const Text(
+                                                                          'না',
+                                                                          style: TextStyle(
+                                                                            color: Color.fromARGB(
+                                                                              255,
+                                                                              33,
+                                                                              37,
+                                                                              252,
+                                                                            ),
+                                                                          ),
+                                                                        ),
+                                                                      ),
+                                                                      TextButton(
+                                                                        onPressed: () {
+                                                                          setDialogState(
+                                                                            () => productList.removeAt(
+                                                                              idx,
+                                                                            ),
+                                                                          );
+                                                                          _saveProducts();
+                                                                          Navigator.pop(
+                                                                            confirmCtx,
+                                                                          );
+                                                                          ScaffoldMessenger.of(
+                                                                            context,
+                                                                          ).showSnackBar(
+                                                                            SnackBar(
+                                                                              content: Text(
+                                                                                '$item ডিলিট হয়েছে',
+                                                                              ),
+                                                                            ),
+                                                                          );
+                                                                        },
+                                                                        child: const Text(
+                                                                          'হ্যাঁ',
+                                                                          style: TextStyle(
+                                                                            color:
+                                                                                Colors.red,
+                                                                          ),
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                );
+                                                              },
+                                                              onTap: () {
+                                                                particularCtrl
+                                                                        .text =
+                                                                    '$item ';
+                                                                particularCtrl
+                                                                    .selection = TextSelection.fromPosition(
+                                                                  TextPosition(
+                                                                    offset: particularCtrl
+                                                                        .text
+                                                                        .length,
+                                                                  ),
+                                                                );
+                                                                setState(() {});
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                );
+                                                              },
+                                                            );
+                                                          },
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                actionsPadding:
+                                                    const EdgeInsets.fromLTRB(
+                                                      8,
+                                                      4,
+                                                      8,
+                                                      8,
+                                                    ),
+                                                actions: [
+                                                  Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .spaceBetween,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .center,
+                                                    children: [
+                                                      Flexible(
+                                                        child: SizedBox(
+                                                          width:
+                                                              MediaQuery.of(
+                                                                context,
+                                                              ).size.width *
+                                                              0.65,
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Expanded(
+                                                                child: TextField(
+                                                                  controller:
+                                                                      newProductController,
+                                                                  decoration: InputDecoration(
+                                                                    hintText:
+                                                                        'নতুন পণ্যের নাম',
+                                                                    hintStyle:
+                                                                        const TextStyle(
+                                                                          fontSize:
+                                                                              15,
+                                                                        ),
+                                                                    contentPadding:
+                                                                        const EdgeInsets.symmetric(
+                                                                          horizontal:
+                                                                              7,
+                                                                          vertical:
+                                                                              5,
+                                                                        ),
+                                                                    border: OutlineInputBorder(
+                                                                      borderRadius:
+                                                                          BorderRadius.circular(
+                                                                            8,
+                                                                          ),
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 4,
+                                                              ),
+                                                              IconButton(
+                                                                icon: const Icon(
+                                                                  Icons
+                                                                      .add_circle,
+                                                                  color: Colors
+                                                                      .green,
+                                                                  size: 30,
+                                                                ),
+                                                                padding:
+                                                                    EdgeInsets
+                                                                        .zero,
+                                                                constraints:
+                                                                    const BoxConstraints(),
+                                                                onPressed: () {
+                                                                  final newItem =
+                                                                      newProductController
+                                                                          .text
+                                                                          .trim();
+                                                                  if (newItem
+                                                                      .isNotEmpty) {
+                                                                    if (!productList
+                                                                        .contains(
+                                                                          newItem,
+                                                                        )) {
+                                                                      setDialogState(
+                                                                        () => productList.add(
+                                                                          newItem,
+                                                                        ),
+                                                                      );
+                                                                      _saveProducts();
+                                                                      newProductController
+                                                                          .clear();
+                                                                      ScaffoldMessenger.of(
+                                                                        context,
+                                                                      ).showSnackBar(
+                                                                        SnackBar(
+                                                                          content: Text(
+                                                                            'পণ্য যোগ হয়েছে: $newItem',
+                                                                          ),
+                                                                        ),
+                                                                      );
+                                                                    } else {
+                                                                      ScaffoldMessenger.of(
+                                                                        context,
+                                                                      ).showSnackBar(
+                                                                        const SnackBar(
+                                                                          content: Text(
+                                                                            'এই পণ্য আগেই আছে',
+                                                                          ),
+                                                                        ),
+                                                                      );
+                                                                    }
+                                                                  }
+                                                                },
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      TextButton(
+                                                        onPressed: () =>
+                                                            Navigator.pop(ctx),
+                                                        child: const Text(
+                                                          'বন্ধ করুন',
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              );
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: particularCtrl,
+                                        focusNode: _particularFocusNode,
+                                        cursorColor: Colors.amber,
+                                        keyboardType: TextInputType.text,
+                                        textCapitalization:
+                                            TextCapitalization.characters,
+                                        enableSuggestions: false,
+                                        autocorrect: false,
+                                        maxLines: 2,
+                                        minLines: 1,
+                                        style: const TextStyle(
+                                          color: Color.fromARGB(
+                                            255,
+                                            255,
+                                            255,
+                                            255,
+                                          ),
+                                          fontSize: 15,
+                                        ),
+                                        decoration: InputDecoration(
+                                          hintText: 'বিবরণ / পণ্য',
+                                          hintStyle: const TextStyle(
+                                            color: Color.fromARGB(
+                                              255,
+                                              255,
+                                              255,
+                                              255,
+                                            ),
+                                          ),
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                vertical: 8,
+                                                horizontal: 0,
+                                              ),
+                                          border: const UnderlineInputBorder(
+                                            borderSide: BorderSide(
+                                              color: Colors.amber,
+                                              width: 2,
+                                            ),
+                                          ),
+                                          enabledBorder:
+                                              const UnderlineInputBorder(
+                                                borderSide: BorderSide(
+                                                  color: Colors.amber,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                          focusedBorder:
+                                              const UnderlineInputBorder(
+                                                borderSide: BorderSide(
+                                                  color: Colors.amber,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                        ),
+                                        onChanged: (value) {
+                                          if (value.length >
+                                              _previousText.length) {
+                                            _tryCalculateFormula(value);
+                                          }
+                                          _previousText = value;
+                                        },
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 0,
+                          ),
+                          decoration: const BoxDecoration(
+                            color: Color.fromARGB(186, 128, 33, 218),
+                            border: Border(
+                              top: BorderSide(
+                                color: Color.fromARGB(186, 128, 33, 218),
+                                width: 0.5,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(
+                                      color: Colors.white70,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 3,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'CANCEL',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () {
+                                    final amount =
+                                        double.tryParse(
+                                          amountCtrl.text.trim(),
+                                        ) ??
+                                        0.0;
+                                    final particular = particularCtrl.text
+                                        .trim();
+
+                                    if (amount <= 0) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'পরিমাণ ০ এর বেশি হতে হবে',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+
+                                    final newTx = {
+                                      'date': DateFormat(
+                                        'dd-MM-yyyy',
+                                      ).format(selectedDate),
+                                      'particular': particular.isEmpty
+                                          ? (isCredit ? 'Credit' : 'Debit')
+                                          : particular,
+                                      'credit': isCredit ? amount : 0.0,
+                                      'debit': isCredit ? 0.0 : amount,
+                                    };
+
+                                    setState(() {
+                                      if (isCredit) {
+                                        account['credit'] =
+                                            (account['credit'] ?? 0.0) + amount;
+                                        account['balance'] =
+                                            (account['balance'] ?? 0.0) +
+                                            amount;
+                                      } else {
+                                        account['debit'] =
+                                            (account['debit'] ?? 0.0) + amount;
+                                        account['balance'] =
+                                            (account['balance'] ?? 0.0) -
+                                            amount;
+                                      }
+                                      transactions.add(newTx);
+                                      account['transactions'] = transactions;
+                                    });
+
+                                    widget.onSave();
+                                    Navigator.pop(context);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Transaction added successfully',
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.amber,
+                                    foregroundColor: const Color.fromARGB(
+                                      255,
+                                      145,
+                                      55,
+                                      230,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 3,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'ADD',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showTransactionForm({int? editIndex}) {
+    DateTime selectedDate = DateTime.now();
+    bool isCredit = true;
+
+    particularCtrl.clear();
+    amountCtrl.clear();
+
+    if (editIndex != null &&
+        editIndex >= 0 &&
+        editIndex < transactions.length) {
+      final tx = transactions[editIndex];
+      // Try parse date from stored formats
+      final dateStr = (tx['date'] ?? '').toString();
+      try {
+        selectedDate = DateFormat('dd-MM-yyyy').parse(dateStr);
+      } catch (_) {
+        try {
+          selectedDate = DateTime.parse(dateStr);
+        } catch (_) {
+          selectedDate = DateTime.now();
+        }
+      }
+      final credit = (tx['credit'] as num?)?.toDouble() ?? 0.0;
+      final debit = (tx['debit'] as num?)?.toDouble() ?? 0.0;
+      isCredit = credit > 0;
+      particularCtrl.text = tx['particular'] ?? '';
+      amountCtrl.text = (isCredit ? credit : debit).toStringAsFixed(0);
+    }
+
+    final newProductController = TextEditingController();
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Scaffold(
+              resizeToAvoidBottomInset: true,
+              backgroundColor: Colors.transparent,
+              body: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.45,
+                    maxWidth: MediaQuery.of(context).size.width * 0.92,
+                  ),
+                  child: Material(
+                    elevation: 12,
+                    borderRadius: BorderRadius.circular(24),
+                    color: const Color(0xFF673AB7),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Center(
+                                  child: Text(
+                                    editIndex == null
+                                        ? 'Add transaction'
+                                        : 'Edit transaction',
+                                    style: TextStyle(
+                                      color: const Color.fromARGB(
+                                        255,
+                                        255,
+                                        255,
+                                        255,
+                                      ),
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      'Transaction Date : ',
+                                      style: TextStyle(
+                                        color: const Color.fromARGB(
+                                          255,
+                                          255,
+                                          255,
+                                          255,
+                                        ),
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: InkWell(
+                                        onTap: () => _showWheelDatePicker(
+                                          selectedDate,
+                                          setModalState,
+                                          (newDate) => setModalState(
+                                            () => selectedDate = newDate,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          DateFormat(
+                                            'dd MMM, yyyy',
+                                          ).format(selectedDate),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 15,
+                                            decoration:
+                                                TextDecoration.underline,
+                                            decorationColor: Colors.amber,
+                                            decorationThickness: 1.5,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    InkWell(
+                                      onTap: () => _showWheelDatePicker(
+                                        selectedDate,
+                                        setModalState,
+                                        (newDate) => setModalState(
+                                          () => selectedDate = newDate,
+                                        ),
+                                      ),
+                                      child: const Icon(
+                                        Icons.arrow_drop_down_circle,
+                                        color: Colors.amber,
+                                        size: 22,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                const SizedBox(height: 20),
+
+                                Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        'Transaction type :',
+                                        style: const TextStyle(
+                                          color: Color.fromARGB(
+                                            255,
+                                            255,
+                                            255,
+                                            255,
+                                          ),
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
+                                    Flexible(
+                                      child: Align(
+                                        alignment: Alignment.centerRight,
+                                        child: FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          alignment: Alignment.centerRight,
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Transform.scale(
+                                                    scale: 2.2,
+                                                    child: Radio<bool>(
+                                                      value: true,
+                                                      groupValue: isCredit,
+                                                      activeColor: Colors.amber,
+                                                      onChanged: (v) {
+                                                        if (v != null) {
+                                                          setModalState(
+                                                            () => isCredit = v,
+                                                          );
+                                                        }
+                                                      },
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  const Text(
+                                                    'Credit (+)',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 24,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Transform.scale(
+                                                    scale: 2.2,
+                                                    child: Radio<bool>(
+                                                      value: false,
+                                                      groupValue: isCredit,
+                                                      activeColor: Colors.amber,
+                                                      onChanged: (v) {
+                                                        if (v != null) {
+                                                          setModalState(
+                                                            () => isCredit = v,
+                                                          );
+                                                        }
+                                                      },
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  const Text(
+                                                    'Debit (-)',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 24,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                const SizedBox(height: 0),
+
+                                Text(
+                                  'Amount :',
+                                  style: TextStyle(
+                                    color: const Color.fromARGB(
+                                      255,
+                                      255,
+                                      255,
+                                      255,
+                                    ),
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 1),
+
+                                TextField(
+                                  controller: amountCtrl,
+                                  focusNode: _amountFocusNode,
+                                  cursorColor: Colors.amber,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  textInputAction: TextInputAction.next,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                  ),
+                                  decoration: InputDecoration(
+                                    hintText: '0.00',
+                                    hintStyle: const TextStyle(
+                                      color: Color.fromARGB(255, 255, 255, 255),
+                                    ),
+                                    prefixText: '৳ ',
+                                    prefixStyle: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      vertical: 6,
+                                      horizontal: 8,
+                                    ),
+                                    border: const UnderlineInputBorder(
+                                      borderSide: BorderSide(
+                                        color: Colors.amber,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    enabledBorder: const UnderlineInputBorder(
+                                      borderSide: BorderSide(
+                                        color: Colors.amber,
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    focusedBorder: const UnderlineInputBorder(
+                                      borderSide: BorderSide(
+                                        color: Colors.amber,
+                                        width: 2.5,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+
+                                Text(
+                                  'Particular :',
+                                  style: TextStyle(
+                                    color: const Color.fromARGB(
+                                      255,
+                                      255,
+                                      255,
+                                      255,
+                                    ),
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 5),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.arrow_drop_down_circle,
+                                        color: Colors.amber,
+                                        size: 25,
+                                      ),
+                                      tooltip: 'পণ্য সিলেক্ট করুন',
+                                      onPressed: () {
+                                        showDialog(
+                                          context: context,
+                                          builder: (ctx) => StatefulBuilder(
+                                            builder: (ctx, setDialogState) {
+                                              return AlertDialog(
+                                                title: const Text(
+                                                  'পণ্য সিলেক্ট করুন',
+                                                  style: TextStyle(
+                                                    fontSize: 17,
+                                                  ),
+                                                ),
+                                                content: SizedBox(
+                                                  width: double.maxFinite,
+                                                  height: 280,
+                                                  child: Column(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .spaceBetween,
+                                                    children: [
+                                                      Expanded(
+                                                        child: ListView.builder(
+                                                          itemCount: productList
+                                                              .length,
+                                                          itemBuilder: (ctx, idx) {
+                                                            final item =
+                                                                productList[idx];
+                                                            return ListTile(
+                                                              dense: true,
+                                                              visualDensity:
+                                                                  VisualDensity
+                                                                      .compact,
+                                                              contentPadding:
+                                                                  const EdgeInsets.symmetric(
+                                                                    horizontal:
+                                                                        12,
+                                                                    vertical: 0,
+                                                                  ),
+                                                              title: Text(
+                                                                item,
+                                                                style: const TextStyle(
+                                                                  fontSize: 16,
+                                                                  color: Colors
+                                                                      .black87,
+                                                                ),
+                                                              ),
+                                                              onLongPress: () {
+                                                                showDialog(
+                                                                  context:
+                                                                      context,
+                                                                  builder: (confirmCtx) => AlertDialog(
+                                                                    title: const Text(
+                                                                      'ডিলিট করবেন?',
+                                                                    ),
+                                                                    content: Text(
+                                                                      'আপনি কি "$item" ডিলিট করতে চান?',
+                                                                    ),
+                                                                    actions: [
+                                                                      TextButton(
+                                                                        onPressed: () =>
+                                                                            Navigator.pop(
+                                                                              confirmCtx,
+                                                                            ),
+                                                                        child: const Text(
+                                                                          'না',
+                                                                          style: TextStyle(
+                                                                            color: Color.fromARGB(
+                                                                              255,
+                                                                              33,
+                                                                              37,
+                                                                              252,
+                                                                            ),
+                                                                          ),
+                                                                        ),
+                                                                      ),
+                                                                      TextButton(
+                                                                        onPressed: () {
+                                                                          setDialogState(
+                                                                            () => productList.removeAt(
+                                                                              idx,
+                                                                            ),
+                                                                          );
+                                                                          _saveProducts();
+                                                                          Navigator.pop(
+                                                                            confirmCtx,
+                                                                          );
+                                                                          ScaffoldMessenger.of(
+                                                                            context,
+                                                                          ).showSnackBar(
+                                                                            SnackBar(
+                                                                              content: Text(
+                                                                                '$item ডিলিট হয়েছে',
+                                                                              ),
+                                                                            ),
+                                                                          );
+                                                                        },
+                                                                        child: const Text(
+                                                                          'হ্যাঁ',
+                                                                          style: TextStyle(
+                                                                            color:
+                                                                                Colors.red,
+                                                                          ),
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                );
+                                                              },
+                                                              onTap: () {
+                                                                particularCtrl
+                                                                        .text =
+                                                                    '$item ';
+                                                                particularCtrl
+                                                                    .selection = TextSelection.fromPosition(
+                                                                  TextPosition(
+                                                                    offset: particularCtrl
+                                                                        .text
+                                                                        .length,
+                                                                  ),
+                                                                );
+                                                                setState(() {});
+                                                                Navigator.pop(
+                                                                  ctx,
+                                                                );
+                                                              },
+                                                            );
+                                                          },
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                                actionsPadding:
+                                                    const EdgeInsets.fromLTRB(
+                                                      8,
+                                                      4,
+                                                      8,
+                                                      8,
+                                                    ),
+                                                actions: [
+                                                  Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .spaceBetween,
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .center,
+                                                    children: [
+                                                      Flexible(
+                                                        child: SizedBox(
+                                                          width:
+                                                              MediaQuery.of(
+                                                                context,
+                                                              ).size.width *
+                                                              0.65,
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Expanded(
+                                                                child: TextField(
+                                                                  controller:
+                                                                      newProductController,
+                                                                  decoration: InputDecoration(
+                                                                    hintText:
+                                                                        'নতুন পণ্যের নাম',
+                                                                    hintStyle:
+                                                                        const TextStyle(
+                                                                          fontSize:
+                                                                              15,
+                                                                        ),
+                                                                    contentPadding:
+                                                                        const EdgeInsets.symmetric(
+                                                                          horizontal:
+                                                                              7,
+                                                                          vertical:
+                                                                              5,
+                                                                        ),
+                                                                    border: OutlineInputBorder(
+                                                                      borderRadius:
+                                                                          BorderRadius.circular(
+                                                                            8,
+                                                                          ),
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                              const SizedBox(
+                                                                width: 4,
+                                                              ),
+                                                              IconButton(
+                                                                icon: const Icon(
+                                                                  Icons
+                                                                      .add_circle,
+                                                                  color: Colors
+                                                                      .green,
+                                                                  size: 30,
+                                                                ),
+                                                                padding:
+                                                                    EdgeInsets
+                                                                        .zero,
+                                                                constraints:
+                                                                    const BoxConstraints(),
+                                                                onPressed: () {
+                                                                  final newItem =
+                                                                      newProductController
+                                                                          .text
+                                                                          .trim();
+                                                                  if (newItem
+                                                                      .isNotEmpty) {
+                                                                    if (!productList
+                                                                        .contains(
+                                                                          newItem,
+                                                                        )) {
+                                                                      setDialogState(
+                                                                        () => productList.add(
+                                                                          newItem,
+                                                                        ),
+                                                                      );
+                                                                      _saveProducts();
+                                                                      newProductController
+                                                                          .clear();
+                                                                      ScaffoldMessenger.of(
+                                                                        context,
+                                                                      ).showSnackBar(
+                                                                        SnackBar(
+                                                                          content: Text(
+                                                                            'পণ্য যোগ হয়েছে: $newItem',
+                                                                          ),
+                                                                        ),
+                                                                      );
+                                                                    } else {
+                                                                      ScaffoldMessenger.of(
+                                                                        context,
+                                                                      ).showSnackBar(
+                                                                        const SnackBar(
+                                                                          content: Text(
+                                                                            'এই পণ্য আগেই আছে',
+                                                                          ),
+                                                                        ),
+                                                                      );
+                                                                    }
+                                                                  }
+                                                                },
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      TextButton(
+                                                        onPressed: () =>
+                                                            Navigator.pop(ctx),
+                                                        child: const Text(
+                                                          'বন্ধ করুন',
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              );
+                                            },
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: particularCtrl,
+                                        focusNode: _particularFocusNode,
+                                        cursorColor: Colors.amber,
+                                        keyboardType: TextInputType.text,
+                                        textCapitalization:
+                                            TextCapitalization.characters,
+                                        enableSuggestions: false,
+                                        autocorrect: false,
+                                        maxLines: 2,
+                                        minLines: 1,
+                                        style: const TextStyle(
+                                          color: Color.fromARGB(
+                                            255,
+                                            255,
+                                            255,
+                                            255,
+                                          ),
+                                          fontSize: 15,
+                                        ),
+                                        decoration: InputDecoration(
+                                          hintText: 'বিবরণ / পণ্য',
+                                          hintStyle: const TextStyle(
+                                            color: Color.fromARGB(
+                                              255,
+                                              255,
+                                              255,
+                                              255,
+                                            ),
+                                          ),
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                vertical: 8,
+                                                horizontal: 0,
+                                              ),
+                                          border: const UnderlineInputBorder(
+                                            borderSide: BorderSide(
+                                              color: Colors.amber,
+                                              width: 2,
+                                            ),
+                                          ),
+                                          enabledBorder:
+                                              const UnderlineInputBorder(
+                                                borderSide: BorderSide(
+                                                  color: Colors.amber,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                          focusedBorder:
+                                              const UnderlineInputBorder(
+                                                borderSide: BorderSide(
+                                                  color: Colors.amber,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                        ),
+                                        onChanged: (value) {
+                                          if (value.length >
+                                              _previousText.length) {
+                                            _tryCalculateFormula(value);
+                                          }
+                                          _previousText = value;
+                                        },
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 0,
+                          ),
+                          decoration: const BoxDecoration(
+                            color: Color.fromARGB(186, 128, 33, 218),
+                            border: Border(
+                              top: BorderSide(
+                                color: Color.fromARGB(186, 128, 33, 218),
+                                width: 0.5,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(
+                                      color: Colors.white70,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 3,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'CANCEL',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () {
+                                    final amount =
+                                        double.tryParse(
+                                          amountCtrl.text.trim(),
+                                        ) ??
+                                        0.0;
+                                    final particular = particularCtrl.text
+                                        .trim();
+
+                                    if (amount <= 0) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'পরিমাণ ০ এর বেশি হতে হবে',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+
+                                    final newTx = {
+                                      'date': DateFormat(
+                                        'dd-MM-yyyy',
+                                      ).format(selectedDate),
+                                      'particular': particular.isEmpty
+                                          ? (isCredit ? 'Credit' : 'Debit')
+                                          : particular,
+                                      'credit': isCredit ? amount : 0.0,
+                                      'debit': isCredit ? 0.0 : amount,
+                                    };
+
+                                    setState(() {
+                                      if (editIndex == null) {
+                                        if (isCredit) {
+                                          account['credit'] =
+                                              (account['credit'] ?? 0.0) +
+                                              amount;
+                                          account['balance'] =
+                                              (account['balance'] ?? 0.0) +
+                                              amount;
+                                        } else {
+                                          account['debit'] =
+                                              (account['debit'] ?? 0.0) +
+                                              amount;
+                                          account['balance'] =
+                                              (account['balance'] ?? 0.0) -
+                                              amount;
+                                        }
+                                        transactions.add(newTx);
+                                      } else {
+                                        // adjust totals based on previous values
+                                        final prev = transactions[editIndex];
+                                        final prevCredit =
+                                            (prev['credit'] as num?)
+                                                ?.toDouble() ??
+                                            0.0;
+                                        final prevDebit =
+                                            (prev['debit'] as num?)
+                                                ?.toDouble() ??
+                                            0.0;
+                                        if (prevCredit > 0) {
+                                          account['credit'] =
+                                              (account['credit'] ?? 0.0) -
+                                              prevCredit;
+                                          account['balance'] =
+                                              (account['balance'] ?? 0.0) -
+                                              prevCredit;
+                                        } else if (prevDebit > 0) {
+                                          account['debit'] =
+                                              (account['debit'] ?? 0.0) -
+                                              prevDebit;
+                                          account['balance'] =
+                                              (account['balance'] ?? 0.0) +
+                                              prevDebit;
+                                        }
+
+                                        if (isCredit) {
+                                          account['credit'] =
+                                              (account['credit'] ?? 0.0) +
+                                              amount;
+                                          account['balance'] =
+                                              (account['balance'] ?? 0.0) +
+                                              amount;
+                                        } else {
+                                          account['debit'] =
+                                              (account['debit'] ?? 0.0) +
+                                              amount;
+                                          account['balance'] =
+                                              (account['balance'] ?? 0.0) -
+                                              amount;
+                                        }
+
+                                        transactions[editIndex] = newTx;
+                                      }
+                                      account['transactions'] = transactions;
+                                    });
+
+                                    widget.onSave();
+                                    Navigator.pop(context);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Transaction saved successfully',
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.amber,
+                                    foregroundColor: const Color.fromARGB(
+                                      255,
+                                      145,
+                                      55,
+                                      230,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 3,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    editIndex == null ? 'ADD' : 'SAVE',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _confirmDelete(int index) {
+    final tx = transactions[index];
+    final credit = (tx['credit'] as num?)?.toDouble() ?? 0.0;
+    final debit = (tx['debit'] as num?)?.toDouble() ?? 0.0;
+    showDialog(
+      context: context,
+      builder: (confirmCtx) => AlertDialog(
+        title: const Text('Delete Transaction?'),
+        content: const Text(
+          'এই ট্রানজেকশন পারমানেন্টভাবে মুছে যাবে। আপনি কি নিশ্চিত?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(confirmCtx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                if (credit > 0) {
+                  account['credit'] = (account['credit'] ?? 0.0) - credit;
+                  account['balance'] = (account['balance'] ?? 0.0) - credit;
+                } else if (debit > 0) {
+                  account['debit'] = (account['debit'] ?? 0.0) - debit;
+                  account['balance'] = (account['balance'] ?? 0.0) + debit;
+                }
+                transactions.removeAt(index);
+                account['transactions'] = transactions;
+              });
+              widget.onSave();
+              Navigator.pop(confirmCtx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Transaction deleted successfully'),
+                ),
+              );
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTxOptions(int index) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.all(0),
+        content: SizedBox(
+          width: 220,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.edit, color: Colors.blue),
+                title: const Text('Edit'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showTransactionForm(editIndex: index);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text('Delete'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _confirmDelete(index);
+                },
+              ),
+              const SizedBox(height: 6),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static const MethodChannel _pdfChannel = MethodChannel(
+    'com.hishab_pro_new/pdf',
+  );
+
+  Future<void> _saveTransactionsAsPdf() async {
+    try {
+      // prepare font (try Bengali font asset, fallback to default)
+      pw.Font baseFont;
+      try {
+        final fontData = await rootBundle.load(
+          'assets/fonts/NotoSansBengali-Regular.ttf',
+        );
+        baseFont = pw.Font.ttf(fontData.buffer.asByteData());
+      } catch (_) {
+        baseFont = pw.Font.helvetica();
+      }
+
+      // prepare totals and signed strings
+      // totals available: totalCredit and totalDebit
+
+      // Use currently filtered transactions (respect search, date range, reverse)
+      final filtered = _getFilteredTransactions();
+
+      // Compute totals for the filtered set
+      final double pdfTotalCredit = filtered.fold<double>(0.0, (acc, t) {
+        return acc + ((t['credit'] as num?)?.toDouble() ?? 0.0);
+      });
+      final double pdfTotalDebit = filtered.fold<double>(0.0, (acc, t) {
+        return acc + ((t['debit'] as num?)?.toDouble() ?? 0.0);
+      });
+
+      // The effective balance for the PDF should reflect the filtered range
+      final double pdfBalance = _previousBalance + _selectedRangeBalance;
+
+      final doc = pw.Document();
+
+      doc.addPage(
+        pw.MultiPage(
+          margin: pw.EdgeInsets.all(0),
+          pageFormat: pdf.PdfPageFormat.a4,
+          theme: pw.ThemeData.withFont(base: baseFont),
+          header: (pw.Context ctx) {
+            return pw.Container(
+              height: 72,
+              color: pdf.PdfColors.deepPurple,
+              padding: const pw.EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+              child: pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                children: [
+                  // 3D-style SAT logo: two layered rectangles for depth and 'SAT' text
+                  pw.Container(
+                    width: 56,
+                    height: 56,
+                    child: pw.Stack(
+                      children: [
+                        pw.Positioned(
+                          left: 6,
+                          top: 8,
+                          child: pw.Container(
+                            width: 48,
+                            height: 48,
+                            decoration: pw.BoxDecoration(
+                              borderRadius: pw.BorderRadius.circular(8),
+                              color: pdf.PdfColors.blue900,
+                            ),
+                          ),
+                        ),
+                        pw.Positioned(
+                          left: 0,
+                          top: 0,
+                          child: pw.Container(
+                            width: 48,
+                            height: 48,
+                            decoration: pw.BoxDecoration(
+                              borderRadius: pw.BorderRadius.circular(8),
+                              color: pdf.PdfColors.cyan400,
+                              boxShadow: [
+                                pw.BoxShadow(
+                                  color: pdf.PdfColors.grey600,
+                                  offset: pdf.PdfPoint(2, 2),
+                                  blurRadius: 2,
+                                ),
+                              ],
+                            ),
+                            child: pw.Center(
+                              child: pw.Text(
+                                'SAT',
+                                style: pw.TextStyle(
+                                  color: pdf.PdfColors.white,
+                                  fontSize: 16,
+                                  fontWeight: pw.FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  pw.SizedBox(width: 12),
+                  pw.Expanded(
+                    child: pw.Center(
+                      child: pw.Text(
+                        '${(account['name'] ?? 'MD KARIM').toString().toUpperCase()} - Transaction History',
+                        style: pw.TextStyle(
+                          color: pdf.PdfColors.white,
+                          fontSize: 16,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+          footer: (pw.Context ctx) {
+            return pw.Container(
+              height: 36,
+              color: pdf.PdfColors.grey300,
+              alignment: pw.Alignment.center,
+              child: pw.Text(
+                'HISHAB PRO — ${DateFormat('dd MMM yyyy').format(DateTime.now())}',
+                style: pw.TextStyle(fontSize: 10),
+              ),
+            );
+          },
+          build: (pw.Context ctx) => [
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+              color: pdf.PdfColors.white,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.SizedBox(height: 6),
+                  // Right-aligned label for Debit/Credit history
+                  pw.Row(
+                    children: [
+                      pw.Expanded(child: pw.Container()),
+                      pw.Container(
+                        padding: const pw.EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: pw.BoxDecoration(
+                          color: pdf.PdfColor.fromInt(0xFF4B2E83),
+                          borderRadius: pw.BorderRadius.circular(4),
+                        ),
+                        child: pw.Text(
+                          'DEBIT/CREDIT HISTORY',
+                          style: pw.TextStyle(
+                            color: pdf.PdfColors.white,
+                            fontSize: 10,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  pw.SizedBox(height: 6),
+                  pw.Container(
+                    color: pdf.PdfColors.white,
+                    child: pw.Table.fromTextArray(
+                      border: pw.TableBorder.all(
+                        color: pdf.PdfColors.grey300,
+                        width: 1,
+                      ),
+                      headers: [
+                        '#',
+                        'Date',
+                        'Particular',
+                        'Debit(Tk)',
+                        'Credit(Tk)',
+                      ],
+                      data: filtered.asMap().entries.map((entry) {
+                        final idx = entry.key;
+                        final tx = entry.value;
+                        final credit =
+                            (tx['credit'] as num?)?.toDouble() ?? 0.0;
+                        final debit = (tx['debit'] as num?)?.toDouble() ?? 0.0;
+                        return [
+                          (idx + 1).toString(),
+                          tx['date'] ?? '',
+                          tx['particular'] ?? '',
+                          debit > 0 ? debit.toStringAsFixed(0) : '',
+                          credit > 0 ? credit.toStringAsFixed(0) : '',
+                        ];
+                      }).toList(),
+                      headerStyle: pw.TextStyle(
+                        fontSize: 11,
+                        fontWeight: pw.FontWeight.bold,
+                        color: pdf.PdfColors.white,
+                      ),
+                      cellStyle: pw.TextStyle(fontSize: 10),
+                      // Right-align numeric columns (Debit, Credit)
+                      cellAlignments: {
+                        3: pw.Alignment.centerRight,
+                        4: pw.Alignment.centerRight,
+                      },
+                      headerDecoration: pw.BoxDecoration(
+                        color: pdf.PdfColor.fromInt(0xFF4B2E83),
+                      ),
+                      cellAlignment: pw.Alignment.centerLeft,
+                      columnWidths: {
+                        0: const pw.FlexColumnWidth(0.8),
+                        1: const pw.FlexColumnWidth(2.0),
+                        2: const pw.FlexColumnWidth(5.0),
+                        3: const pw.FlexColumnWidth(2.0),
+                        4: const pw.FlexColumnWidth(2.0),
+                      },
+                    ),
+                  ),
+                  pw.SizedBox(height: 12),
+                  // Totals row styled like the image (purple background, totals on right)
+                  pw.Container(
+                    width: double.infinity,
+                    decoration: pw.BoxDecoration(
+                      color: pdf.PdfColor.fromInt(0xFF4B2E83),
+                    ),
+                    padding: const pw.EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    child: pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Text(
+                          'Total',
+                          style: pw.TextStyle(
+                            color: pdf.PdfColors.white,
+                            fontSize: 14,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        pw.Row(
+                          mainAxisSize: pw.MainAxisSize.min,
+                          children: [
+                            pw.Container(
+                              padding: const pw.EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              color: pdf.PdfColor.fromInt(0xFF4B2E83),
+                              child: pw.Text(
+                                _fmtMoney(pdfTotalDebit),
+                                style: pw.TextStyle(
+                                  color: pdf.PdfColors.white,
+                                  fontSize: 14,
+                                  fontWeight: pw.FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            pw.SizedBox(width: 12),
+                            pw.Container(
+                              padding: const pw.EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              color: pdf.PdfColor.fromInt(0xFF4B2E83),
+                              child: pw.Text(
+                                _fmtMoney(pdfTotalCredit),
+                                style: pw.TextStyle(
+                                  color: pdf.PdfColors.white,
+                                  fontSize: 14,
+                                  fontWeight: pw.FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  pw.SizedBox(height: 6),
+                  pw.Container(
+                    width: double.infinity,
+                    decoration: pw.BoxDecoration(
+                      color: pdf.PdfColor.fromInt(0xFF3A2470),
+                    ),
+                    padding: const pw.EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    child: pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Text(
+                          'Balance',
+                          style: pw.TextStyle(
+                            color: pdf.PdfColors.white,
+                            fontSize: 14,
+                          ),
+                        ),
+                        pw.Text(
+                          pdfBalance < 0
+                              ? '-${_fmtMoney(pdfBalance.abs())}'
+                              : _fmtMoney(pdfBalance),
+                          style: pw.TextStyle(
+                            color: pdf.PdfColors.white,
+                            fontSize: 14,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+
+      final bytes = await doc.save();
+      // Build filename: ACCOUNT NAME (uppercase, spaces allowed) + _DDMMYYYY.PDF
+      final accountLabel = (account['name'] ?? 'MD KARIM')
+          .toString()
+          .trim()
+          .toUpperCase()
+          .replaceAll(RegExp(r"[^A-Za-z0-9 _-]"), '');
+      final outFileName =
+          '${accountLabel}_${DateFormat('ddMMyyyy').format(DateTime.now())}.PDF';
+      // Prefer saving via MediaStore on Android (compatible with scoped storage)
+      String savedPath = '';
+      if (Platform.isAndroid) {
+        try {
+          final base64Data = base64Encode(bytes);
+          final res = await _pdfChannel.invokeMethod('savePdf', {
+            'bytes': base64Data,
+            'displayName': outFileName,
+            'mimeType': 'application/pdf',
+          });
+          if (res is String) savedPath = res;
+        } catch (e) {
+          // fallback: try writing to external path if MediaStore failed
+        }
+      }
+
+      // If not saved by MediaStore, fall back to legacy external path write
+      if (savedPath.isEmpty) {
+        // Request storage permission on Android before writing to external path
+        if (Platform.isAndroid) {
+          PermissionStatus status = await Permission.storage.status;
+          if (!status.isGranted) {
+            status = await Permission.storage.request();
+          }
+          if (!status.isGranted) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Storage permission required to save PDF'),
+              ),
+            );
+            return;
+          }
+        }
+
+        final externalDir = Directory('/storage/emulated/0/HISHAB PRO NEW');
+        if (!await externalDir.exists()) {
+          try {
+            await externalDir.create(recursive: true);
+          } catch (_) {
+            // fallback to app external dir
+          }
+        }
+
+        final file = File('${externalDir.path}/$outFileName');
+        await file.writeAsBytes(bytes);
+        savedPath = file.path;
+      }
+
+      // Show success dialog with path and share option
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Successfully'),
+          content: Text('/document/raw:$savedPath'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('CANCEL'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                // If savedPath is a content URI, share from memory bytes; otherwise share file path
+                if (savedPath.startsWith('content://')) {
+                  final x = share_plus.XFile.fromData(
+                    bytes,
+                    name: outFileName,
+                    mimeType: 'application/pdf',
+                  );
+                  share_plus.Share.shareXFiles([
+                    x,
+                  ], text: 'HISHAB PRO - Transaction History PDF');
+                } else {
+                  share_plus.Share.shareXFiles([
+                    share_plus.XFile(savedPath),
+                  ], text: 'HISHAB PRO - Transaction History PDF');
+                }
+              },
+              child: const Text('SHARE'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error saving PDF: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        titleSpacing: 0,
+        backgroundColor: const Color(0xFF673AB7),
+        foregroundColor: Colors.white,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 4),
+          child: IconButton(
+            icon: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF673AB7),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.arrow_back,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
+        title: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(
+            account['name'] ?? 'অজানা',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.normal,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 0),
+            child: IconButton(
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF673AB7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.add, color: Colors.white, size: 24),
+              ),
+              onPressed: _addTransaction,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 0),
+            child: IconButton(
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _showFilterPanel
+                      ? Colors.white
+                      : const Color(0xFF673AB7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.search,
+                  color: _showFilterPanel
+                      ? const Color(0xFF673AB7)
+                      : Colors.white,
+                  size: 24,
+                ),
+              ),
+              onPressed: () {
+                setState(() {
+                  _showFilterPanel = !_showFilterPanel;
+                });
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 0),
+            child: PopupMenuButton<String>(
+              onSelected: (value) async {
+                if (value == 'save_pdf') {
+                  await _saveTransactionsAsPdf();
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'save_pdf',
+                  child: Text('Save as PDF'),
+                ),
+              ],
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF673AB7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.more_vert,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: RawScrollbar(
+        controller: _scrollController,
+        thumbVisibility: true,
+        thickness: 6,
+        radius: const Radius.circular(4),
+        thumbColor: Colors.transparent,
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          child: Column(
+            children: [
+              // Filter Panel
+              if (_showFilterPanel)
+                Container(
+                  color: Colors.grey.shade100,
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Reverse Sorting Checkbox
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: _reverseSorting,
+                            onChanged: (value) {
+                              setState(() {
+                                _reverseSorting = value ?? false;
+                                // Recalculate immediately so list & balances update
+                                _getFilteredTransactions();
+                              });
+                            },
+                            activeColor: const Color(0xFF673AB7),
+                          ),
+                          const Text(
+                            'Reverse Sorting',
+                            style: TextStyle(fontSize: 14),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      // From Date Field
+                      GestureDetector(
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: _filterFromDate ?? DateTime.now(),
+                            firstDate: DateTime(2000),
+                            lastDate: DateTime(2100),
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              _filterFromDate = picked;
+                              // Recalculate immediately so balance box updates live
+                              _getFilteredTransactions();
+                            });
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            borderRadius: BorderRadius.circular(6),
+                            color: Colors.white,
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.calendar_today, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _filterFromDate != null
+                                      ? DateFormat(
+                                          'dd/MM/yyyy',
+                                        ).format(_filterFromDate!)
+                                      : 'From date',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: _filterFromDate != null
+                                        ? Colors.black
+                                        : Colors.grey,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      // To Date Field
+                      GestureDetector(
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: _filterToDate ?? DateTime.now(),
+                            firstDate: DateTime(2000),
+                            lastDate: DateTime(2100),
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              _filterToDate = picked;
+                              // Recalculate immediately so balance box updates live
+                              _getFilteredTransactions();
+                            });
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            borderRadius: BorderRadius.circular(6),
+                            color: Colors.white,
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.calendar_today, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _filterToDate != null
+                                      ? DateFormat(
+                                          'dd/MM/yyyy',
+                                        ).format(_filterToDate!)
+                                      : 'To date',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: _filterToDate != null
+                                        ? Colors.black
+                                        : Colors.grey,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      // Balance Display
+                      if (_filterFromDate != null || _filterToDate != null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: const Color(0xFF673AB7),
+                              width: 2,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Smart Reverse Sorting',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF673AB7),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('Previous Balance:'),
+                                  Text(
+                                    '৳ ${_fmt(_previousBalance.abs())}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: _previousBalance >= 0
+                                          ? Colors.green
+                                          : Colors.red,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('Range Balance:'),
+                                  Text(
+                                    '৳ ${_fmt(_selectedRangeBalance.abs())}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: _selectedRangeBalance >= 0
+                                          ? Colors.green
+                                          : Colors.red,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const Divider(height: 12),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
+                                    'Total:',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  Text(
+                                    '৳ ${_fmt((_previousBalance + _selectedRangeBalance).abs())}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                      color:
+                                          (_previousBalance +
+                                                  _selectedRangeBalance) >=
+                                              0
+                                          ? Colors.green
+                                          : Colors.red,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      const SizedBox(height: 12),
+                      // Buttons
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          ElevatedButton(
+                            onPressed: _clearFilters,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.grey.shade400,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('CLEAR'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: _applyFilters,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF673AB7),
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('APPLY'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 0.0,
+                  vertical: 8,
+                ),
+                child: Table(
+                  border: TableBorder.all(
+                    color: Colors.grey.shade300,
+                    width: 1,
+                  ),
+                  columnWidths: const {
+                    0: FlexColumnWidth(2.3),
+                    1: FlexColumnWidth(4.1),
+                    2: FlexColumnWidth(2.3),
+                    3: FlexColumnWidth(2.3),
+                  },
+                  children: [
+                    TableRow(
+                      decoration: BoxDecoration(color: Colors.grey.shade100),
+                      children: const [
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(0, 4, 6, 4),
+                          child: Text(
+                            'Date',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: 4,
+                            horizontal: 6,
+                          ),
+                          child: Text(
+                            'Particular',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: 4,
+                            horizontal: 6,
+                          ),
+                          child: Text(
+                            'Credit(Tk)',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.fromLTRB(6, 4, 0, 4),
+                          child: Text(
+                            'Debit(Tk)',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red,
+                            ),
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    ..._getFilteredTransactions().asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final tx = entry.value;
+                      final credit = (tx['credit'] as num?)?.toDouble() ?? 0.0;
+                      final debit = (tx['debit'] as num?)?.toDouble() ?? 0.0;
+                      final bool isCredit = credit > 0;
+                      final Color rowColor = isCredit
+                          ? Colors.green
+                          : (debit > 0 ? Colors.red : Colors.black87);
+                      return TableRow(
+                        decoration: BoxDecoration(
+                          color: index % 2 == 0
+                              ? Colors.white
+                              : const Color(0xFFF7F7F7),
+                        ),
+                        children: [
+                          InkWell(
+                            onTap: () => _showTxOptions(index),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(0, 6, 6, 6),
+                              child: Text(
+                                tx['date'] ?? '',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: rowColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                            onTap: () => _showTxOptions(index),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 6,
+                                ),
+                                child: Text(
+                                  tx['particular'] ?? '',
+                                  textAlign: TextAlign.left,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: rowColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                            onTap: () => _showTxOptions(index),
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                child: Text(
+                                  credit > 0 ? _fmt(credit) : '',
+                                  style: TextStyle(
+                                    color: rowColor,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                            onTap: () => _showTxOptions(index),
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                child: Text(
+                                  debit > 0 ? _fmt(debit) : '',
+                                  style: TextStyle(
+                                    color: rowColor,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
+
+                    // totals row removed from table; totals are shown in fixed footer below
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(
+            top: BorderSide(color: Colors.grey.shade300, width: 1),
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Container(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'Credit(↑)',
+                      style: TextStyle(
+                        color: Colors.green.shade700,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        '৳ ${_fmt(totalCredit)}',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Container(
+              height: 40,
+              width: 1,
+              color: Colors.grey.shade300,
+              margin: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    'Debit(↓)',
+                    style: TextStyle(color: Colors.red.shade700, fontSize: 12),
+                  ),
+                  const SizedBox(height: 4),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.center,
+                    child: Text(
+                      '৳ ${_fmt(totalDebit)}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF673AB7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Balance',
+                      style: TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.center,
+                      child: Text(
+                        '৳ ${_fmt(balance)}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

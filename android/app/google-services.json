@@ -1,0 +1,38 @@
+{
+  "project_info": {
+    "project_number": "428310411419",
+    "project_id": "hishab-pro-new",
+    "storage_bucket": "hishab-pro-new.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:428310411419:android:3c47a77b79db9d82186e3e",
+        "android_client_info": {
+          "package_name": "com.example.hishab_pro_new"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "428310411419-pvfi6n1evigo5h514p18un9j0gj8hikp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.hishab_pro_new",
+            "certificate_hash": "5177444b2607f13f13d18661d8c1b1a279850560"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBT_hBtq7g6cOHNqej_UD3DgIsvV8tKHrg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,32 @@
+name: iOS Pod Install & Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pod_install_and_build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 'stable'
+
+      - name: Install CocoaPods
+        run: |
+          gem install cocoapods
+
+      - name: Install iOS pods
+        working-directory: ios
+        run: |
+          pod repo update || true
+          pod install --verbose
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        run: flutter build ios --no-codesign
