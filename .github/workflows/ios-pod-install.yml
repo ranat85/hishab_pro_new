@@ -2,6 +2,9 @@ name: iOS Pod Install & Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   pod_install_and_build:
