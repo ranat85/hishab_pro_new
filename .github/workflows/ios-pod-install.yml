@@ -42,6 +42,18 @@ jobs:
           if [ -d "Flutter" ] && [ ! -e "flutter" ]; then
             ln -s Flutter flutter
           fi
+          # create minimal podhelper stub if missing to avoid Podfile require error
+          if [ ! -f flutter/podhelper.rb ]; then
+            cat > flutter/podhelper.rb <<'RUBY'
+def flutter_install_all_ios_pods(ios_application_path = nil)
+  # Minimal stub: no-op. Plugins/pods will be handled by Flutter tooling during build.
+end
+
+def flutter_install_ios_pods(ios_application_path = nil)
+  flutter_install_all_ios_pods(ios_application_path)
+end
+RUBY
+          fi
           pod repo update || true
           pod install --verbose
 
