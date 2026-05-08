@@ -38,6 +38,10 @@ jobs:
       - name: Install iOS pods
         working-directory: ios
         run: |
+          # ensure path expected by Podfile exists (some generated files are in ios/Flutter)
+          if [ -d "Flutter" ] && [ ! -e "flutter" ]; then
+            ln -s Flutter flutter
+          fi
           pod repo update || true
           pod install --verbose
 
