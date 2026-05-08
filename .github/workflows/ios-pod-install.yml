@@ -8,7 +8,7 @@ on:
 
 jobs:
   pod_install_and_build:
-    runs-on: macos-11
+    runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
