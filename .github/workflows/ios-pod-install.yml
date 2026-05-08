@@ -26,14 +26,20 @@ jobs:
         run: |
           gem install cocoapods
 
+      - name: Flutter pub get
+        run: |
+          flutter pub get
+          flutter precache --ios || true
+
+      - name: Install CocoaPods
+        run: |
+          gem install cocoapods
+
       - name: Install iOS pods
         working-directory: ios
         run: |
           pod repo update || true
           pod install --verbose
-
-      - name: Flutter pub get
-        run: flutter pub get
 
       - name: Build iOS (no codesign)
         run: flutter build ios --no-codesign
