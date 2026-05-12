@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+import 'dart:developer' as developer;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -15,10 +17,11 @@ class FirebaseService {
   /// Sign in with Google
   static Future<UserCredential?> signInWithGoogle() async {
     try {
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      final gsign.GoogleSignInAccount? googleUser = await _googleSignIn
+          .signIn();
       if (googleUser == null) return null;
 
-      final GoogleSignInAuthentication googleAuth =
+      final gsign.GoogleSignInAuthentication googleAuth =
           await googleUser.authentication;
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
@@ -27,7 +30,7 @@ class FirebaseService {
 
       return await _auth.signInWithCredential(credential);
     } catch (e) {
-      print('Google Sign-In Error: $e');
+      developer.log('Google Sign-In Error: $e', name: 'FirebaseService');
       return null;
     }
   }
@@ -43,7 +46,7 @@ class FirebaseService {
         password: password,
       );
     } catch (e) {
-      print('Email Sign-In Error: $e');
+      developer.log('Email Sign-In Error: $e', name: 'FirebaseService');
       return null;
     }
   }
@@ -59,7 +62,7 @@ class FirebaseService {
         password: password,
       );
     } catch (e) {
-      print('Email Sign-Up Error: $e');
+      developer.log('Email Sign-Up Error: $e', name: 'FirebaseService');
       return null;
     }
   }
@@ -75,7 +78,7 @@ class FirebaseService {
       await _auth.signOut();
       await _googleSignIn.signOut();
     } catch (e) {
-      print('Sign Out Error: $e');
+      developer.log('Sign Out Error: $e', name: 'FirebaseService');
     }
   }
 
@@ -115,7 +118,7 @@ class FirebaseService {
         userId,
       ).doc(accountId).set(accountData, SetOptions(merge: true));
     } catch (e) {
-      print('Save Account Error: $e');
+      developer.log('Save Account Error: $e', name: 'FirebaseService');
     }
   }
 
@@ -127,7 +130,7 @@ class FirebaseService {
           .map((doc) => {'id': doc.id, ...doc.data() as Map<String, dynamic>})
           .toList();
     } catch (e) {
-      print('Get Accounts Error: $e');
+      developer.log('Get Accounts Error: $e', name: 'FirebaseService');
       return [];
     }
   }
@@ -146,7 +149,7 @@ class FirebaseService {
       // Then delete the account
       await getUserAccountsCollection(userId).doc(accountId).delete();
     } catch (e) {
-      print('Delete Account Error: $e');
+      developer.log('Delete Account Error: $e', name: 'FirebaseService');
     }
   }
 
@@ -163,7 +166,7 @@ class FirebaseService {
         accountId,
       ).doc(txId).set(txData, SetOptions(merge: true));
     } catch (e) {
-      print('Save Transaction Error: $e');
+      developer.log('Save Transaction Error: $e', name: 'FirebaseService');
     }
   }
 
@@ -181,7 +184,7 @@ class FirebaseService {
           .map((doc) => {'id': doc.id, ...doc.data() as Map<String, dynamic>})
           .toList();
     } catch (e) {
-      print('Get Transactions Error: $e');
+      developer.log('Get Transactions Error: $e', name: 'FirebaseService');
       return [];
     }
   }
@@ -195,7 +198,7 @@ class FirebaseService {
     try {
       await getUserTransactionsCollection(userId, accountId).doc(txId).delete();
     } catch (e) {
-      print('Delete Transaction Error: $e');
+      developer.log('Delete Transaction Error: $e', name: 'FirebaseService');
     }
   }
 
@@ -205,29 +208,29 @@ class FirebaseService {
   static Future<String?> uploadBackup(
     String userId,
     String fileName,
-    List<int> fileBytes,
+    Uint8List fileBytes,
   ) async {
     try {
       final ref = _storage.ref().child('backups').child(userId).child(fileName);
       await ref.putData(fileBytes);
       return await ref.getDownloadURL();
     } catch (e) {
-      print('Upload Backup Error: $e');
+      developer.log('Upload Backup Error: $e', name: 'FirebaseService');
       return null;
     }
   }
 
   /// Download backup file from Firebase Storage
-  static Future<List<int>?> downloadBackup(
+  static Future<Uint8List?> downloadBackup(
     String userId,
     String fileName,
   ) async {
     try {
       final ref = _storage.ref().child('backups').child(userId).child(fileName);
-      final data = await ref.getData();
+      final Uint8List? data = await ref.getData();
       return data;
     } catch (e) {
-      print('Download Backup Error: $e');
+      developer.log('Download Backup Error: $e', name: 'FirebaseService');
       return null;
     }
   }
