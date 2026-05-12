@@ -13,75 +13,75 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       FLUTTER_ROOT: /Users/runner/flutter
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      name: iOS Pod Install & Build
 
-      - name: Install Flutter SDK (stable)
-        run: |
-          git clone https://github.com/flutter/flutter.git -b stable --depth 1 $HOME/flutter
-          echo "$HOME/flutter/bin" >> $GITHUB_PATH
-          export PATH="$HOME/flutter/bin:$PATH"
-          flutter --version
+      on:
+        workflow_dispatch:
+        push:
+          branches:
+            - main
 
-      - name: Install CocoaPods
-        run: |
-          gem install cocoapods
+      jobs:
+        pod_install_and_build:
+          runs-on: macos-latest
+          env:
+            FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+          steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-      - name: Flutter pub get
-        run: |
-          # remove any committed plugin metadata so pub can regenerate platform paths on the runner
-          if [ -f .flutter-plugins-dependencies ]; then
-            rm .flutter-plugins-dependencies
-          fi
-          if [ -f .flutter-plugins ]; then
-            rm .flutter-plugins
-          fi
-          flutter pub get --verbose
-          flutter precache --ios || true
+            - name: Install Flutter SDK (stable)
+              run: |
+                git clone https://github.com/flutter/flutter.git -b stable --depth 1 $HOME/flutter
+                echo "$HOME/flutter/bin" >> $GITHUB_PATH
+                export PATH="$HOME/flutter/bin:$PATH"
+                flutter --version
 
-      - name: Install CocoaPods
-        run: |
-          gem install cocoapods
+            - name: Install CocoaPods
+              run: |
+                gem install cocoapods
 
-      - name: Ensure ios symlink exists
-        working-directory: ios
-        run: |
-          # ensure path expected by Podfile exists (some generated files are in ios/Flutter)
-          if [ -d "Flutter" ] && [ ! -e "flutter" ]; then
-            ln -s Flutter flutter
-          fi
+            - name: Flutter pub get
+              run: |
+                # remove any committed plugin metadata so pub can regenerate platform paths on the runner
+                if [ -f .flutter-plugins-dependencies ]; then
+                  rm .flutter-plugins-dependencies
+                fi
+                if [ -f .flutter-plugins ]; then
+                  rm .flutter-plugins
+                fi
+                flutter pub get --verbose
+                flutter precache --ios || true
 
-      - name: Create ios/flutter/podhelper.rb
-        run: |
-          mkdir -p ios/flutter
-          flutter_root=${FLUTTER_ROOT:-$HOME/flutter}
-          sdk_podhelper="$flutter_root/packages/flutter_tools/bin/podhelper.rb"
-          if [ -f "$sdk_podhelper" ]; then
-            cp "$sdk_podhelper" ios/flutter/podhelper.rb
-          else
-            cat > ios/flutter/podhelper.rb << 'EOF'
-            def flutter_install_all_ios_pods(_); end
-            EOF
-          fi
-          ls -la ios/flutter || true
+            - name: Install CocoaPods
+              run: |
+                gem install cocoapods
 
-      - name: Generate iOS plugin files (build once to create podhelper)
-        run: |
-          flutter pub get --verbose
-          flutter precache --ios || true
-          flutter build ios --no-codesign -v 2>&1 | tee build_ios_gen.log || true
-          ls -la ios/flutter || true
+            - name: Ensure ios symlink exists
+              working-directory: ios
+              run: |
+                # ensure path expected by Podfile exists (some generated files are in ios/Flutter)
+                if [ -d "Flutter" ] && [ ! -e "flutter" ]; then
+                  ln -s Flutter flutter
+                fi
 
-      - name: Run CocoaPods install (manual)
-        working-directory: ios
-        run: |
-          gem install cocoapods
-          pod --version
-          pod install --verbose 2>&1 | tee pod_install.log || true
-          ls -la Pods || true
+            - name: Build iOS (no codesign, verbose)
+              run: |
+                # Let Flutter generate iOS plugin files and run pod install internally
+                flutter pub get
+                flutter precache --ios || true
+                flutter build ios --no-codesign -v 2>&1 | tee build_ios.log
 
-      - name: Debug ios contents and podhelper
-        run: |
+            - name: Upload pod artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                name: ios-pod-artifacts
+                path: |
+                  build_ios.log
+                  ios/Podfile
+                  ios/Podfile.lock
+                  ios/Runner/GeneratedPluginRegistrant.*
+                  ios/Pods/Manifest.lock
           echo "---- ios directory listing ----" > ios_debug.txt
           ls -la ios >> ios_debug.txt || true
           echo "---- check podhelper ----" >> ios_debug.txt
