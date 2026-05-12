@@ -28,7 +28,14 @@ jobs:
 
       - name: Flutter pub get
         run: |
-          flutter pub get
+          # remove any committed plugin metadata so pub can regenerate platform paths on the runner
+          if [ -f .flutter-plugins-dependencies ]; then
+            rm .flutter-plugins-dependencies
+          fi
+          if [ -f .flutter-plugins ]; then
+            rm .flutter-plugins
+          fi
+          flutter pub get --verbose
           flutter precache --ios || true
 
       - name: Install CocoaPods
