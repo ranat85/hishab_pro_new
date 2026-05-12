@@ -10,12 +10,18 @@ project 'Runner', {
 
 def flutter_install_ios_pods(ios_application_path = nil)
   podhelper_path = File.expand_path(File.join('flutter', 'podhelper'), File.dirname(__FILE__))
+  flutter_root = ENV['FLUTTER_ROOT'] || File.expand_path("$HOME/flutter")
+  sdk_podhelper = File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
+
   if File.exist?(podhelper_path + '.rb')
     require podhelper_path
     flutter_install_all_ios_pods(ios_application_path)
+  elsif File.exist?(sdk_podhelper)
+    require sdk_podhelper
+    flutter_install_all_ios_pods(ios_application_path)
   else
     # podhelper.rb not present in CI environment yet — skip plugin pod installation.
-    puts 'Warning: ios/flutter/podhelper.rb not found; skipping flutter_install_all_ios_pods'
+    puts 'Warning: ios/flutter/podhelper.rb not found and FLUTTER_ROOT podhelper missing; skipping flutter_install_all_ios_pods'
   end
 end
 
