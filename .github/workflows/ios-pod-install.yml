@@ -55,7 +55,17 @@ end
 RUBY
           fi
           pod repo update || true
-          pod install --verbose
+          pod install --verbose 2>&1 | tee pod_install.log
 
       - name: Build iOS (no codesign)
         run: flutter build ios --no-codesign
+
+      - name: Upload pod artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-pod-artifacts
+          path: |
+            ios/pod_install.log
+            ios/flutter/podhelper.rb
+            ios/Podfile
+            ios/Podfile.lock
