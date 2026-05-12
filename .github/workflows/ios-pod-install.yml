@@ -50,6 +50,20 @@ jobs:
             ln -s Flutter flutter
           fi
 
+      - name: Create ios/flutter/podhelper.rb
+        run: |
+          mkdir -p ios/flutter
+          flutter_root=${FLUTTER_ROOT:-$HOME/flutter}
+          sdk_podhelper="$flutter_root/packages/flutter_tools/bin/podhelper.rb"
+          if [ -f "$sdk_podhelper" ]; then
+            cp "$sdk_podhelper" ios/flutter/podhelper.rb
+          else
+            cat > ios/flutter/podhelper.rb << 'EOF'
+            def flutter_install_all_ios_pods(_); end
+            EOF
+          fi
+          ls -la ios/flutter || true
+
       - name: Build iOS (no codesign, verbose)
         run: |
           # Let Flutter generate iOS plugin files and run pod install internally
