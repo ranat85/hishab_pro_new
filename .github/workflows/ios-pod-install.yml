@@ -45,14 +45,18 @@ jobs:
 
       - name: Build iOS (no codesign, verbose)
         run: |
-          flutter build ios --no-codesign -v 2>&1 | tee ios/flutter_build.log
+          # Let Flutter generate iOS plugin files and run pod install internally
+          flutter pub get
+          flutter precache --ios || true
+          flutter build ios --no-codesign -v 2>&1 | tee build_ios.log
 
-      - name: Upload build artifacts
+      - name: Upload pod artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ios-pod-artifacts
           path: |
-            ios/flutter_build.log
+            build_ios.log
             ios/Podfile
             ios/Podfile.lock
             ios/Runner/GeneratedPluginRegistrant.*
+            ios/Pods/Manifest.lock
