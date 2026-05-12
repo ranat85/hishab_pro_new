@@ -44,8 +44,7 @@ jobs:
           fi
           # create minimal podhelper stub if missing to avoid Podfile require error
           if [ ! -f flutter/podhelper.rb ]; then
-            printf '%s
-' "def flutter_install_all_ios_pods(ios_application_path = nil)" \
+            printf '%s\n' "def flutter_install_all_ios_pods(ios_application_path = nil)" \
               "  # Minimal stub: no-op. Plugins/pods will be handled by Flutter tooling during build." \
               "end" \
               "" \
