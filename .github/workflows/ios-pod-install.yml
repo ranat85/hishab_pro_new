@@ -11,6 +11,7 @@ jobs:
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      FLUTTER_ROOT: /Users/runner/flutter
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,9 +20,7 @@ jobs:
         run: |
           git clone https://github.com/flutter/flutter.git -b stable --depth 1 $HOME/flutter
           echo "$HOME/flutter/bin" >> $GITHUB_PATH
-          # Persist FLUTTER_ROOT and PATH for subsequent steps
-          echo "FLUTTER_ROOT=$HOME/flutter" >> $GITHUB_ENV
-          echo "PATH=$HOME/flutter/bin:$PATH" >> $GITHUB_ENV
+          export PATH="$HOME/flutter/bin:$PATH"
           flutter --version
 
       - name: Install CocoaPods
@@ -94,7 +93,10 @@ jobs:
           name: ios-pod-artifacts
           path: |
             build_ios.log
+            build_ios_gen.log
+            pod_install.log
             ios/Podfile
             ios/Podfile.lock
             ios/Runner/GeneratedPluginRegistrant.*
             ios/Pods/Manifest.lock
+            ios/Pods/**
