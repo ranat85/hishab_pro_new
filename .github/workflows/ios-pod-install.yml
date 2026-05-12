@@ -11,6 +11,7 @@ jobs:
     runs-on: macos-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      FLUTTER_ROOT: ${{ env.HOME }}/flutter
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -63,6 +64,21 @@ jobs:
             EOF
           fi
           ls -la ios/flutter || true
+
+      - name: Generate iOS plugin files (build once to create podhelper)
+        run: |
+          flutter pub get --verbose
+          flutter precache --ios || true
+          flutter build ios --no-codesign -v 2>&1 | tee build_ios_gen.log || true
+          ls -la ios/flutter || true
+
+      - name: Run CocoaPods install (manual)
+        working-directory: ios
+        run: |
+          gem install cocoapods
+          pod --version
+          pod install --verbose 2>&1 | tee pod_install.log || true
+          ls -la Pods || true
 
       - name: Build iOS (no codesign, verbose)
         run: |
