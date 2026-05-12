@@ -35,20 +35,24 @@ jobs:
         run: |
           gem install cocoapods
 
+      - name: Ensure ios symlink exists
+        working-directory: ios
+        run: |
+          # ensure path expected by Podfile exists (some generated files are in ios/Flutter)
+          if [ -d "Flutter" ] && [ ! -e "flutter" ]; then
+            ln -s Flutter flutter
+          fi
+
       - name: Build iOS (no codesign, verbose)
         run: |
-          # Let Flutter generate iOS plugin files and run pod install internally
-          flutter pub get
-          flutter precache --ios || true
-          flutter build ios --no-codesign -v 2>&1 | tee build_ios.log
+          flutter build ios --no-codesign -v 2>&1 | tee ios/flutter_build.log
 
-      - name: Upload pod artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ios-pod-artifacts
           path: |
-            build_ios.log
+            ios/flutter_build.log
             ios/Podfile
             ios/Podfile.lock
             ios/Runner/GeneratedPluginRegistrant.*
-            ios/Pods/Manifest.lock
