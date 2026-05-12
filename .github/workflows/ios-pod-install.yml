@@ -80,6 +80,19 @@ jobs:
           pod install --verbose 2>&1 | tee pod_install.log || true
           ls -la Pods || true
 
+      - name: Debug ios contents and podhelper
+        run: |
+          echo "---- ios directory listing ----" > ios_debug.txt
+          ls -la ios >> ios_debug.txt || true
+          echo "---- check podhelper ----" >> ios_debug.txt
+          if [ -f ios/flutter/podhelper.rb ]; then
+            echo "podhelper.rb exists:" >> ios_debug.txt
+            cat ios/flutter/podhelper.rb >> ios_debug.txt
+          else
+            echo "podhelper.rb NOT FOUND" >> ios_debug.txt
+          fi
+          cp ios_debug.txt . || true
+
       - name: Build iOS (no codesign, verbose)
         run: |
           # Let Flutter generate iOS plugin files and run pod install internally
@@ -95,6 +108,7 @@ jobs:
             build_ios.log
             build_ios_gen.log
             pod_install.log
+            ios_debug.txt
             ios/Podfile
             ios/Podfile.lock
             ios/Runner/GeneratedPluginRegistrant.*
