@@ -1,0 +1,34 @@
+platform :ios, '13.0'
+
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_install_ios_pods(ios_application_path = nil)
+  podhelper_path = File.expand_path(File.join('flutter', 'podhelper'), File.dirname(__FILE__))
+  if File.exist?(podhelper_path + '.rb')
+    require podhelper_path
+    flutter_install_all_ios_pods(ios_application_path)
+  else
+    # podhelper.rb not present in CI environment yet — skip plugin pod installation.
+    puts 'Warning: ios/flutter/podhelper.rb not found; skipping flutter_install_all_ios_pods'
+  end
+end
+
+target 'Runner' do
+  use_frameworks!
+  use_modular_headers!
+  flutter_install_ios_pods(File.dirname(File.realpath(__FILE__)))
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+    end
+  end
+end

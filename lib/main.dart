@@ -16,7 +16,7 @@ import 'package:share_plus/share_plus.dart' as share_plus;
 import 'package:intl/intl.dart';
 import 'package:flutter/services.dart' show rootBundle, MethodChannel;
 import 'package:path_provider/path_provider.dart';
-// removed unused dart:typed_data import (foundation provides debug util)
+import 'dart:typed_data';
 import 'dart:async';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:sqflite/sqflite.dart';
@@ -1158,6 +1158,90 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Future<void> _showFirebaseBackupDialog() async {
+    final fileName =
+        '${DateFormat('dd-MM-yyyy_HH-mm-ss').format(DateTime.now())}.json';
+    final content = jsonEncode({'accounts': _accounts});
+    await _uploadToFirebase(fileName, content);
+  }
+
+  Future<void> _showFirebaseRestoreDialog() async {
+    try {
+      final user = FirebaseService.getCurrentUser();
+      if (user == null) {
+        final cred = await FirebaseService.signInWithGoogle();
+        if (cred == null || cred.user == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Google sign-in required for Firebase restore'),
+            ),
+          );
+          return;
+        }
+      }
+      final uid = FirebaseService.getCurrentUser()!.uid;
+      final backups = await FirebaseService.listBackups(uid);
+      if (backups.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No backups found in Firebase')),
+        );
+        return;
+      }
+      if (!mounted) return;
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('Select Firebase backup to restore'),
+          children: backups.map((name) {
+            return SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, name),
+              child: Text(name),
+            );
+          }).toList(),
+        ),
+      );
+      if (choice == null) return;
+      final data = await FirebaseService.downloadBackup(uid, choice);
+      if (data == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to download backup')),
+        );
+        return;
+      }
+      final content = utf8.decode(data);
+      try {
+        final decoded = jsonDecode(content);
+        if (decoded is Map && decoded['accounts'] is List) {
+          setState(() {
+            _accounts = (decoded['accounts'] as List)
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList();
+          });
+          await _saveAccounts();
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Restore from Firebase completed')),
+          );
+          return;
+        }
+      } catch (_) {}
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Downloaded backup has unexpected format'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Firebase restore failed: $e')));
+    }
+  }
+
   Future<void> _pickDirectoryAndBackup(String fileName, String content) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1236,9 +1320,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final lastDone = prefs.getString('last_auto_backup_date') ?? '';
         if (lastDone == todayKey) return; // already backed up today
         _isAutoBackingUp = true;
-        final fileName = '${DateFormat('dd-MM-yyyy').format(now)}.JSON';
+        final fileName =
+            '${DateFormat('dd-MM-yyyy_HH-mm-ss').format(now)}.json';
         final content = jsonEncode({'accounts': _accounts});
-        await _uploadToDrive(fileName, content);
+        if (enabledDrive) {
+          await _uploadToDrive(fileName, content);
+        }
+        if (enabledFirebase) {
+          await _uploadToFirebase(fileName, content);
+        }
         await prefs.setString('last_auto_backup_date', todayKey);
       } catch (_) {
         // ignore errors for scheduler
@@ -1246,6 +1336,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _isAutoBackingUp = false;
       }
     });
+  }
+
+  Future<void> _uploadToFirebase(String fileName, String content) async {
+    try {
+      final user = FirebaseService.getCurrentUser();
+      final uid = user?.uid;
+      if (uid == null) {
+        final cred = await FirebaseService.signInWithGoogle();
+        if (cred == null || cred.user == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Google sign-in required for Firebase backup'),
+            ),
+          );
+          return;
+        }
+      }
+      final finalUid = FirebaseService.getCurrentUser()?.uid;
+      if (finalUid == null) return;
+      final bytes = Uint8List.fromList(utf8.encode(content));
+      final url = await FirebaseService.uploadBackup(finalUid, fileName, bytes);
+      if (!mounted) return;
+      if (url != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Backup uploaded to Firebase')),
+        );
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Firebase backup failed')));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Firebase upload failed: $e')));
+    }
   }
 
   Future<void> _showDriveRestoreDialog() async {
@@ -1950,6 +2078,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         SimpleDialogOption(
                           onPressed: () {
                             Navigator.pop(ctx);
+                            _showFirebaseBackupDialog();
+                          },
+                          child: const Text('Backup to Firebase Storage'),
+                        ),
+                        SimpleDialogOption(
+                          onPressed: () {
+                            Navigator.pop(ctx);
                             _savePrefsBackup();
                           },
                           child: const Text('Save prefs backup'),
@@ -1976,6 +2111,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   _showDriveRestoreDialog();
+                },
+              ),
+              ListTile(
+                leading: _multiColorIcon(Icons.cloud, [
+                  Colors.indigo,
+                  Colors.blue,
+                ]),
+                title: const Text(
+                  'Restore from Firebase',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showFirebaseRestoreDialog();
                 },
               ),
               const Divider(),
@@ -2332,6 +2481,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _chronological = false;
   bool _backupReminder = false;
   bool _autoDriveBackup = false;
+  bool _autoFirebaseBackup = false;
   bool _unlockWithFingerprint = false;
 
   @override
@@ -2346,6 +2496,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _chronological = prefs.getBool('chronological_sorting') ?? false;
       _backupReminder = prefs.getBool('backup_reminder') ?? false;
       _autoDriveBackup = prefs.getBool('auto_drive_backup') ?? false;
+      _autoFirebaseBackup = prefs.getBool('auto_firebase_backup') ?? false;
       _unlockWithFingerprint =
           prefs.getBool('unlock_with_fingerprint') ?? false;
     });
@@ -2438,6 +2589,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 8),
                 const Text(
                   'When enabled the app will automatically upload a backup to your Google Drive between 10:00 PM and 11:59 PM once per day.',
+                  style: TextStyle(color: Colors.black54),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: const Text(
+                        'Auto Firebase backup (22:00 - 23:59)',
+                        style: TextStyle(fontSize: 16),
+                      ),
+                    ),
+                    Switch(
+                      value: _autoFirebaseBackup,
+                      onChanged: (v) async {
+                        setState(() => _autoFirebaseBackup = v);
+                        await _setBool('auto_firebase_backup', v);
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'When enabled the app will also upload a backup to your Firebase Storage account (requires sign-in).',
                   style: TextStyle(color: Colors.black54),
                 ),
               ],
