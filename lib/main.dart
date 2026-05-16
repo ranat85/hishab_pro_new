@@ -9,7 +9,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
-import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdf/pdf.dart' as pdf;
@@ -27,7 +26,7 @@ import 'package:googleapis/drive/v3.dart' as gd;
 import 'package:http/http.dart' as http;
 import 'package:local_auth/local_auth.dart';
 import 'firebase_options.dart';
-import 'admob_helper.dart';
+// AdMob removed per user request
 import 'firebase_service.dart';
 
 // Simple authenticated HTTP client that injects Google auth headers.
@@ -468,9 +467,7 @@ Future<void> main() async {
     debugPrint('Firebase.initializeApp() failed: $e');
   }
 
-  try {
-    MobileAds.instance.initialize();
-  } catch (_) {}
+  // MobileAds removed — no initialization
 
   runApp(const MyApp());
 }
@@ -514,8 +511,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final LocalAuthentication _localAuth = LocalAuthentication();
   Timer? _autoBackupTimer;
   bool _isAutoBackingUp = false;
-  BannerAd? _bannerAd;
-  bool _isBannerAdReady = false;
+  // AdMob banner removed
 
   @override
   void initState() {
@@ -533,23 +529,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await _maybeShowAuth();
     });
 
-    // Initialize banner ad
-    try {
-      _bannerAd = BannerAd(
-        adUnitId: AdMobHelper.bannerAdUnitId,
-        size: AdSize.banner,
-        request: const AdRequest(),
-        listener: BannerAdListener(
-          onAdLoaded: (ad) {
-            if (mounted) setState(() => _isBannerAdReady = true);
-          },
-          onAdFailedToLoad: (ad, error) {
-            ad.dispose();
-          },
-        ),
-      );
-      _bannerAd!.load();
-    } catch (_) {}
+    // AdMob removed — no banner initialization
   }
 
   // One-off helper: import a JSON backup file if present on device.
@@ -703,7 +683,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _autoBackupTimer?.cancel();
-    _bannerAd?.dispose();
+    // AdMob removed — nothing to dispose
     super.dispose();
   }
 
@@ -2063,15 +2043,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ),
-      persistentFooterButtons: _isBannerAdReady
-          ? [
-              SizedBox(
-                width: MediaQuery.of(context).size.width,
-                height: _bannerAd!.size.height.toDouble(),
-                child: AdWidget(ad: _bannerAd!),
-              ),
-            ]
-          : null,
+      persistentFooterButtons: null,
       appBar: AppBar(
         title: const Text('হিসাব প্রো'),
         backgroundColor: const Color(0xFF673AB7),
